@@ -1,0 +1,34 @@
+DEFINITION:
+  NUM_PT: 5
+  MIRROR_MAPPING:
+    - [0, 1]
+    - [3, 4]
+
+DATASETS:
+  - /path/to/list1.txt
+  - /path/to/list2.txt
+
+VAL_DATASETS:
+  - /path/to/val_list.txt
+
+  AUGMENTATION:
+  ROTATE: 180
+  ROTATE_STEP: 90
+  SCALE: [0.8, 1.2]
+  TRANSLATE_RATIO: 0.25
+  BBOX_RATIO:
+
+MODEL:
+  BACKBONE: resnet18
+  INPUT_SIZE: 224
+  HIDDEN_DIM: 256
+  NUM_HIDDEN: 1
+  HIDDEN_ACT: relu
+  HIDDEN_ACT_KWARGS: {}
+
+TRAIN:
+  BATCH_SIZE: 128
+  OPTIMIZER: sgd
+  LR: 0.01
+  WD: 5.e-4
+  LOSS: smoothl1
