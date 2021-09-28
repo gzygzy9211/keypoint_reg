@@ -122,7 +122,7 @@ class KeyPointModel(nn.Module):
             nn.Flatten(1),
             LinearBNAct(out_size, hidden_dim,
                         hidden_act_type, hidden_act_kwargs),
-            *[LinearBNAct(hidden_dim, num_hidden, hidden_act_type,
+            *[LinearBNAct(hidden_dim, hidden_dim, hidden_act_type,
                           hidden_act_kwargs) for _ in range(num_hidden - 1)],
             nn.Linear(hidden_dim, 2 * num_pt, bias=True)
         )
