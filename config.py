@@ -1,3 +1,4 @@
+from copy import deepcopy
 from easydict import EasyDict as EZ
 
 __C = EZ()
@@ -34,6 +35,14 @@ cfg.TRAIN.LR = 0.01
 cfg.TRAIN.WD = 5e-4
 cfg.TRAIN.EPOCH = 120
 cfg.TRAIN.LOSS = 'smoothl1'
+
+__defualt = deepcopy(cfg)
+
+
+def reset_to_default():
+    global cfg
+    __C = deepcopy(__defualt)
+    cfg = __C
 
 
 def merge_from_file(path: str):

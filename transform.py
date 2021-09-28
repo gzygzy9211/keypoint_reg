@@ -86,7 +86,8 @@ class Transform:
         trans = self.get_affine_matrix(image, pts)
         image, pts = self.apply_affine_matrix(image, pts, trans)
         return {'image': self.image_transform(image),
-                'pts': from_numpy(pts.reshape(-1))}
+                'pts': from_numpy(pts.reshape(-1)),
+                'inverse_trans': from_numpy(np.linalg.inv(trans))}
 
     BORDER_VALUE = np.array([0.485, 0.456, 0.406][::-1]) * 255
 
@@ -185,6 +186,7 @@ def get_inverse_transform() -> Callable[[Tensor], np.ndarray]:
         InverseNormalize(mean=MEAN, std=STD),
         ToPILImage(),
         PILToNumpy(),
+        BGR2RGB(),
     ])
 
 

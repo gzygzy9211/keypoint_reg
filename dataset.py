@@ -205,7 +205,7 @@ def visualize(image: Tensor, pts: Tensor) -> np.ndarray:
         x, y = nppts[i, :]
         print(x, y)
         cv2.circle(npimage, (int(x * 16), int(y * 16)), 16,
-                   color=PALETTE[i * 3 + 3: i * 3 + 6],
+                   color=PALETTE[i * 3 + 3: i * 3 + 6][::-1],
                    thickness=thick, shift=4)
     return npimage
 
@@ -222,4 +222,4 @@ if __name__ == '__main__':
         s = ds[0]
         assert 'image' in s and 'pts' in s
         show = visualize(s['image'], s['pts'])
-        cv2.imwrite(f'trans_{i}.png', show[:, :, ::-1])
+        cv2.imwrite(f'trans_{i}.png', show)
