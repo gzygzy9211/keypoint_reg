@@ -11,7 +11,7 @@ DATASETS:
 VAL_DATASETS:
   - /path/to/val_list.txt
 
-  AUGMENTATION:
+AUGMENTATION:
   ROTATE: 180
   ROTATE_STEP: 90
   SCALE: [0.8, 1.2]

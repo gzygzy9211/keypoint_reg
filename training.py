@@ -99,6 +99,10 @@ class KeyPointTraining:
         self._init()
 
     def _init(self):
+        from torch import distributed as dist
+        import sys
+        import numpy as np
+
         if self.pretrain is not None:
             new_weights = torch.load(self.pretrain, map_location='cpu')
             cur_weights = module_state_dict(self.model)
@@ -113,29 +117,61 @@ class KeyPointTraining:
 
         # if os.path.exists(self.ckpt_path) and os.path.isdir(self.ckpt_path):
         # we just try and fall back to ignoring ckpts in case any error
-        try:
-            import re
-            # resume from latest checkpoint
-            ckpt_pat = re.compile(r'epoch_([0-9]+).pth')
-            ckpt_names = {int(ckpt_pat.match(filename).groups()[0]): filename
-                          for filename in os.listdir(self.ckpt_path)
-                          if ckpt_pat.match(filename) is not None}
-            latest_ckpt = torch.load(self.ckpt_path + '/' +
-                                     ckpt_names[max(ckpt_names.keys())],
-                                     map_location='cpu')
-            self.optim.load_state_dict(latest_ckpt['optim'])
-            self.loss.load_state_dict(latest_ckpt['loss'])
-            module_load_state_dict(self.model, latest_ckpt['model'])
-            self.epoch = latest_ckpt['epoch']
+        resume_status = torch.zeros(1, dtype=torch.int64, device='cuda')
+        ckpt_path = ''
+        # negative -> fail, should terminate
+        # 0 -> ckpt not exist, continue
+        # positive -> number of bytes of ckpt path
+        if Runtime.rank == 0:
+            try:
+                import re
+                # resume from latest checkpoint
+                ckpt_pat = re.compile(r'epoch_([0-9]+).pth')
+                ckpt_names = {int(ckpt_pat.match(filename).groups()[0]): filename
+                              for filename in os.listdir(self.ckpt_path)
+                              if ckpt_pat.match(filename) is not None}
+                ckpt_path = self.ckpt_path + '/' + ckpt_names[max(ckpt_names.keys())]
 
-        except (FileNotFoundError, NotADirectoryError, ValueError) as e:
-            if Runtime.local_rank == 0:
+                latest_ckpt = torch.load(ckpt_path, map_location='cpu')
+                self.optim.load_state_dict(latest_ckpt['optim'])
+                self.loss.load_state_dict(latest_ckpt['loss'])
+                module_load_state_dict(self.model, latest_ckpt['model'])
+                self.epoch = latest_ckpt['epoch']
+
+                resume_status[0] = len(ckpt_path.encode('utf-8'))
+
+            except (FileNotFoundError, NotADirectoryError, ValueError) as e:
                 print(f'FAIL TO LOAD CHECKPOINT DUE TO: {str(e)}')
-            if os.path.exists(self.ckpt_path) and os.path.isdir(self.ckpt_path):
-                raise
-            elif os.path.exists(self.ckpt_path):
-                os.remove(self.ckpt_path)
-            os.makedirs(self.ckpt_path, exist_ok=True)
+                if os.path.exists(self.ckpt_path) and os.path.isdir(self.ckpt_path):
+                    resume_status[0] = -1
+                elif os.path.exists(self.ckpt_path):
+                    os.remove(self.ckpt_path)
+                    resume_status[0] = 0
+
+        dist.broadcast(resume_status, 0, async_op=False)
+
+        if resume_status[0].item() < 0:
+            sys.exit(resume_status[0].item())
+
+        elif resume_status[0].item() == 0:
+            if Runtime.rank == 0:
+                os.makedirs(self.ckpt_path, exist_ok=True)
+
+        else:
+            resume_path_bytes = torch.empty(resume_status[0].item(), dtype=torch.uint8, device='cuda') \
+                if Runtime.rank > 0 else torch.from_numpy(
+                    np.frombuffer(ckpt_path.encode('utf-8'), dtype=np.uint8)
+            ).cuda()
+            dist.broadcast(resume_path_bytes, 0, async_op=False)
+            ckpt_path = resume_path_bytes.cpu().numpy().tobytes().decode('utf8')
+            print(f'Rank {Runtime.rank}: resume_path = {ckpt_path}')
+
+            if Runtime.rank > 0:
+                latest_ckpt = torch.load(ckpt_path, map_location='cpu')
+                self.optim.load_state_dict(latest_ckpt['optim'])
+                self.loss.load_state_dict(latest_ckpt['loss'])
+                module_load_state_dict(self.model, latest_ckpt['model'])
+                self.epoch = latest_ckpt['epoch']
 
     def _train_step(self, batch: Dict[str, Tensor]):
         self.optim.zero_grad()
