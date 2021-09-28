@@ -124,7 +124,7 @@ class KeyPointModel(nn.Module):
                         hidden_act_type, hidden_act_kwargs),
             *[LinearBNAct(hidden_dim, num_hidden, hidden_act_type,
                           hidden_act_kwargs) for _ in range(num_hidden - 1)],
-            LinearBNAct(hidden_dim, 2 * num_pt, hidden_act_type, hidden_act_kwargs)
+            nn.Linear(hidden_dim, 2 * num_pt, bias=True)
         )
 
     def forward(self, x: Tensor) -> Tensor:
