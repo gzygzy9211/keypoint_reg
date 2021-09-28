@@ -5,3 +5,4 @@ class Runtime:
     local_rank = 0.
 
     print_freq = 100
+    num_workers = 4

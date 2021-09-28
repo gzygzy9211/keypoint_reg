@@ -3,7 +3,7 @@ from runtime import Runtime
 from optim import adjust_learning_rate, build_optimizer, get_loss
 from model import build_model
 from dataset import build_dataset
-from typing import Dict
+from typing import Dict, Tuple
 import torch
 from torch.utils.data import DistributedSampler
 from torch import nn, Tensor
@@ -34,6 +34,16 @@ class AverageMeter(object):
 
     def __float__(self):
         return self.avg
+
+
+def rmse_accumulate(pred: Tensor, ref: Tensor) -> Tuple[Tensor, Tensor]:
+    # pred, ref: [batch, numpt * 2]
+    diff = pred - ref
+    inv_numpt = torch.empty((), dtype=torch.float32).fill_(2. / ref.size(1))
+    batch = torch.empty((), dtype=torch.long).fill_(ref.size(0))
+    rmse_batch = torch.sqrt(inv_numpt * (diff * diff).sum(axis=1))
+    rmse_acc = rmse_batch.sum()
+    return rmse_acc, batch
 
 
 def module_state_dict(m: nn.Module) -> Dict[str, Tensor]:
@@ -70,19 +80,20 @@ class KeyPointTraining:
             train_sampler = DistributedSampler(self.dataset, Runtime.world_size, Runtime.rank, shuffle=True)
             self.loader = DataLoader(self.dataset, cfg.TRAIN.BATCH_SIZE,
                                      sampler=train_sampler, pin_memory=True,
-                                     drop_last=True, num_workers=2)
+                                     drop_last=True, num_workers=Runtime.num_workers)
         else:
             self.loader = None
 
         if len(self.val_dataset) > 0:
             val_sampler = DistributedSampler(self.val_dataset, Runtime.world_size, Runtime.rank, shuffle=False)
-            self.val_loader = DataLoader(self.val_dataset, 4,
+            self.val_loader = DataLoader(self.val_dataset, cfg.TRAIN.BATCH_SIZE,
                                          sampler=val_sampler, pin_memory=True,
-                                         drop_last=False, num_workers=2)
+                                         drop_last=False, num_workers=Runtime.num_workers)
         else:
             self.val_loader = None
 
         self.loss_tracker = AverageMeter()
+        self.train_rmse_tracker = AverageMeter()
         self.epoch = 0
 
         self._init()
@@ -100,22 +111,29 @@ class KeyPointTraining:
                 cur_weights[key] = new_weights[key].to(cur_weights[key].device)
             module_load_state_dict(cur_weights)
 
-        if os.path.exists(self.ckpt_path) and os.path.isdir(self.ckpt_path):
+        # if os.path.exists(self.ckpt_path) and os.path.isdir(self.ckpt_path):
+        # we just try and fall back to ignoring ckpts in case any error
+        try:
             import re
             # resume from latest checkpoint
             ckpt_pat = re.compile(r'epoch_([0-9]+).pth')
             ckpt_names = {int(ckpt_pat.match(filename).groups()[0]): filename
                           for filename in os.listdir(self.ckpt_path)
                           if ckpt_pat.match(filename) is not None}
-            latest_ckpt = torch.load(ckpt_names[max(ckpt_names.keys())],
+            latest_ckpt = torch.load(self.ckpt_path + '/' +
+                                     ckpt_names[max(ckpt_names.keys())],
                                      map_location='cpu')
             self.optim.load_state_dict(latest_ckpt['optim'])
             self.loss.load_state_dict(latest_ckpt['loss'])
             module_load_state_dict(self.model, latest_ckpt['model'])
             self.epoch = latest_ckpt['epoch']
 
-        else:
-            if os.path.exists(self.ckpt_path):
+        except (FileNotFoundError, NotADirectoryError, ValueError) as e:
+            if Runtime.local_rank == 0:
+                print(f'FAIL TO LOAD CHECKPOINT DUE TO: {str(e)}')
+            if os.path.exists(self.ckpt_path) and os.path.isdir(self.ckpt_path):
+                raise
+            elif os.path.exists(self.ckpt_path):
                 os.remove(self.ckpt_path)
             os.makedirs(self.ckpt_path, exist_ok=True)
 
@@ -126,8 +144,11 @@ class KeyPointTraining:
         loss.backward()
         self.optim.step()
 
-        loss, _ = reduce_loss_watch(loss, {})
+        with torch.no_grad():
+            rmse_acc, count = rmse_accumulate(pred, batch['pts'])
+        loss, watch = reduce_loss_watch(loss, {'rmse': rmse_acc / count.float()})
         self.loss_tracker.update(loss.item())
+        self.train_rmse_tracker.update(watch['rmse'].item())
 
     def snapshot(self):
         if Runtime.rank != 0:
@@ -153,7 +174,11 @@ class KeyPointTraining:
             self._train_step(batch)
 
             if (Runtime.local_rank == 0 and (step + 1) % Runtime.print_freq == 0):
-                print(f'epoch {self.epoch} step {step + 1}, lr = {cur_lr}, loss = {float(self.loss_tracker)}')
+                print(f'epoch {self.epoch} step {step + 1}, lr = {cur_lr}, '
+                      f'loss = {float(self.loss_tracker)}, '
+                      f'rmse = {float(self.train_rmse_tracker)}')
+                self.loss_tracker.reset()
+                self.train_rmse_tracker.reset()
 
         self.epoch += 1
         self.snapshot()
@@ -182,14 +207,13 @@ class KeyPointTraining:
                     dist.barrier()
                 pred = self.model(batch['image'])
                 ref = batch['pts']
+                rmse_cur, count_cur = rmse_accumulate(pred, ref)
+                rmse_sum += rmse_cur
+                count += count_cur
+                del rmse_cur, count_cur
 
-                diff = pred - ref
-                rmse_sum += (diff * diff).sum().sqrt() / ref.size(1) * 2
-                count += torch.empty((), dtype=torch.long, device='cuda').fill_(
-                    ref.size(0))
-
-            rmse_sum = reduce_tensor(rmse_sum)
-            count = reduce_tensor(count.float())
+            rmse_sum = reduce_tensor(rmse_sum, mean=False)
+            count = reduce_tensor(count.float(), mean=False)
             return (rmse_sum / count).item()
 
     @property

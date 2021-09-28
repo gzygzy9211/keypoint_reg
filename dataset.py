@@ -153,7 +153,7 @@ def build_dataset(training: bool) -> ConcatDataset:
         bbox_ratio=cfg.AUGMENTATION.BBOX_RATIO,
     )
     datasets = [PtsDataset(
-        listfile,
+        path.abspath(listfile),
         cfg.DEFINITION.NUM_PT,
         deepcopy(train_trans) if training else deepcopy(eval_trans),
         cfg.DEFINITION.MIRROR_MAPPING,
