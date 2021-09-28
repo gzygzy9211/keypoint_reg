@@ -69,8 +69,9 @@ class KeyPointTraining:
         self.pretrain = pretrain
 
         self.model = build_model().cuda()
-        pg_syncbn = get_pg_for_syncbn(Runtime.world_size, Runtime.rank, Runtime.local_rank)
-        self.model = DDP(SyncBN.convert_sync_batchnorm(self.model, pg_syncbn), device_ids=[Runtime.local_rank])
+        if training:
+            pg_syncbn = get_pg_for_syncbn(Runtime.world_size, Runtime.rank, Runtime.local_rank)
+            self.model = DDP(SyncBN.convert_sync_batchnorm(self.model, pg_syncbn), device_ids=[Runtime.local_rank])
         self.optim = build_optimizer(self.model)
         self.loss = get_loss().cuda()
         self.dataset = build_dataset(True) if training else None
@@ -148,7 +149,8 @@ class KeyPointTraining:
                     os.remove(self.ckpt_path)
                     resume_status[0] = 0
 
-        dist.broadcast(resume_status, 0, async_op=False)
+        if Runtime.world_size > 1:
+            dist.broadcast(resume_status, 0, async_op=False)
 
         if resume_status[0].item() < 0:
             sys.exit(resume_status[0].item())
@@ -158,6 +160,9 @@ class KeyPointTraining:
                 os.makedirs(self.ckpt_path, exist_ok=True)
 
         else:
+            if Runtime.world_size == 1:
+                return
+
             resume_path_bytes = torch.empty(resume_status[0].item(), dtype=torch.uint8, device='cuda') \
                 if Runtime.rank > 0 else torch.from_numpy(
                     np.frombuffer(ckpt_path.encode('utf-8'), dtype=np.uint8)

@@ -26,6 +26,8 @@ if __name__ == '__main__':
     device = next(m.parameters()).device
     assert len(training.val_dataset) > 0
     sample = training.val_dataset[0]
+
+    m.eval()
     output = m(sample['image'].unsqueeze(0).to(device))
 
     print(output)
