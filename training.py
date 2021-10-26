@@ -114,7 +114,7 @@ class KeyPointTraining:
                     print(f'skip {key}: expect {cur_weights[key].size()} got {new_weights[key].size()}')
                     continue
                 cur_weights[key] = new_weights[key].to(cur_weights[key].device)
-            module_load_state_dict(cur_weights)
+            module_load_state_dict(self.model, cur_weights)
 
         # if os.path.exists(self.ckpt_path) and os.path.isdir(self.ckpt_path):
         # we just try and fall back to ignoring ckpts in case any error
